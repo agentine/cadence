@@ -2,6 +2,7 @@ package cadence
 
 import (
 	"context"
+	"math/rand"
 	"sort"
 	"sync"
 	"time"
@@ -133,7 +134,7 @@ func (c *Cron) Location() *time.Location {
 func (c *Cron) run() {
 	now := c.clock.Now().In(c.location)
 	for _, entry := range c.entries {
-		entry.Next = entry.Schedule.Next(now)
+		entry.Next = c.applyJitter(entry.Schedule.Next(now))
 	}
 
 	var wg sync.WaitGroup
@@ -173,12 +174,12 @@ func (c *Cron) run() {
 					e.WrappedJob.Run()
 				}(entry)
 				entry.Prev = entry.Next
-				entry.Next = entry.Schedule.Next(now)
+				entry.Next = c.applyJitter(entry.Schedule.Next(now))
 			}
 
 		case newEntry := <-c.add:
 			now = c.clock.Now().In(c.location)
-			newEntry.Next = newEntry.Schedule.Next(now)
+			newEntry.Next = c.applyJitter(newEntry.Schedule.Next(now))
 			c.entries = append(c.entries, newEntry)
 
 		case id := <-c.remove:
@@ -208,4 +209,12 @@ func (c *Cron) entrySnapshot() []Entry {
 		entries[i] = *e
 	}
 	return entries
+}
+
+// applyJitter adds a random jitter of up to c.jitter to the given time.
+func (c *Cron) applyJitter(t time.Time) time.Time {
+	if c.jitter <= 0 {
+		return t
+	}
+	return t.Add(time.Duration(rand.Int63n(int64(c.jitter))))
 }

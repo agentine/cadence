@@ -1,6 +1,9 @@
 package cadence
 
-import "time"
+import (
+	"context"
+	"time"
+)
 
 // WithLocation sets the time location for the scheduler.
 func WithLocation(loc *time.Location) Option {
@@ -41,5 +44,22 @@ func WithLogger(logger Logger) Option {
 func WithClock(clock Clock) Option {
 	return func(c *Cron) {
 		c.clock = clock
+	}
+}
+
+// WithContext sets a parent context for the scheduler. All running jobs
+// share this context, and cancelling it signals shutdown.
+func WithContext(ctx context.Context) Option {
+	return func(c *Cron) {
+		c.cancel()
+		c.ctx, c.cancel = context.WithCancel(ctx)
+	}
+}
+
+// WithJitter adds a random jitter of up to d to each job's Next time,
+// spreading load across a time window.
+func WithJitter(d time.Duration) Option {
+	return func(c *Cron) {
+		c.jitter = d
 	}
 }

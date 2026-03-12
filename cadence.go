@@ -134,6 +134,7 @@ type Cron struct {
 	snapshot  chan chan []Entry
 	logger    Logger
 	chain     Chain
+	jitter    time.Duration
 	ctx       context.Context
 	cancel    context.CancelFunc
 }
