@@ -23,6 +23,7 @@ func New(opts ...Option) *Cron {
 		remove:   make(chan EntryID),
 		snapshot: make(chan chan []Entry),
 		chain:    NewChain(),
+		logger:   DiscardLogger,
 		ctx:      ctx,
 		cancel:   cancel,
 	}
@@ -146,6 +147,19 @@ func (c *Cron) Location() *time.Location {
 	return c.location
 }
 
+// IsRunning reports whether the scheduler is running.
+func (c *Cron) IsRunning() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.running
+}
+
+// AddFuncContext adds a context-aware function to the cron schedule.
+// The function receives the scheduler's context when executed.
+func (c *Cron) AddFuncContext(spec string, cmd func(context.Context)) (EntryID, error) {
+	return c.AddJob(spec, &contextFuncJob{fn: cmd})
+}
+
 // ---------------------------------------------------------------------------
 // Run loop
 // ---------------------------------------------------------------------------
@@ -190,10 +204,19 @@ func (c *Cron) run() {
 				wg.Add(1)
 				go func(e *Entry) {
 					defer wg.Done()
-					e.WrappedJob.Run()
+					if cj, ok := e.WrappedJob.(ContextualJob); ok {
+						cj.RunContext(c.ctx)
+					} else {
+						e.WrappedJob.Run()
+					}
 				}(entry)
 				entry.Prev = entry.Next
 				entry.Next = c.applyJitter(entry.Schedule.Next(now))
+				// Prevent double execution on backward clock jumps: ensure
+				// Next is strictly after Prev.
+				if !entry.Next.After(entry.Prev) {
+					entry.Next = c.applyJitter(entry.Schedule.Next(entry.Prev))
+				}
 			}
 
 		case newEntry := <-c.add:

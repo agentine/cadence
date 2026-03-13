@@ -18,6 +18,21 @@ type FuncJob func()
 // Run calls the underlying function.
 func (f FuncJob) Run() { f() }
 
+// ContextualJob is an optional interface for jobs that accept a context.
+// If a job implements ContextualJob, the scheduler calls RunContext with
+// its context instead of Run.
+type ContextualJob interface {
+	RunContext(context.Context)
+}
+
+// contextFuncJob adapts a context-aware function to both Job and ContextualJob.
+type contextFuncJob struct {
+	fn func(context.Context)
+}
+
+func (j *contextFuncJob) Run()                          { j.fn(context.Background()) }
+func (j *contextFuncJob) RunContext(ctx context.Context) { j.fn(ctx) }
+
 // Schedule describes a recurring time schedule.
 type Schedule interface {
 	// Next returns the next activation time after the given time.

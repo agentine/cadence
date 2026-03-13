@@ -1,6 +1,7 @@
 package cadence
 
 import (
+	"context"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -358,4 +359,164 @@ func TestLocation_AffectsScheduling(t *testing.T) {
 	if len(entries) != 1 {
 		t.Fatal("expected 1 entry")
 	}
+}
+
+// ---------------------------------------------------------------------------
+// New feature tests
+// ---------------------------------------------------------------------------
+
+func TestIsRunning(t *testing.T) {
+	c := New()
+	if c.IsRunning() {
+		t.Error("should not be running initially")
+	}
+	c.AddFunc("@every 1h", func() {})
+	c.Start()
+	if !c.IsRunning() {
+		t.Error("should be running after Start")
+	}
+	c.Stop()
+	// After Stop returns, running should be false.
+	if c.IsRunning() {
+		t.Error("should not be running after Stop")
+	}
+}
+
+func TestParseStandard(t *testing.T) {
+	sched, err := ParseStandard("*/5 * * * *")
+	if err != nil {
+		t.Fatalf("ParseStandard failed: %v", err)
+	}
+	if sched == nil {
+		t.Fatal("ParseStandard returned nil schedule")
+	}
+	// Verify it produces a valid next time.
+	next := sched.Next(time.Now())
+	if next.IsZero() {
+		t.Error("expected non-zero next time")
+	}
+}
+
+func TestParseStandardDescriptor(t *testing.T) {
+	sched, err := ParseStandard("@hourly")
+	if err != nil {
+		t.Fatalf("ParseStandard(@hourly) failed: %v", err)
+	}
+	next := sched.Next(time.Now())
+	if next.IsZero() {
+		t.Error("expected non-zero next time for @hourly")
+	}
+}
+
+func TestParseStandardInvalid(t *testing.T) {
+	_, err := ParseStandard("invalid cron")
+	if err == nil {
+		t.Error("expected error for invalid spec")
+	}
+}
+
+func TestDefaultLogger(t *testing.T) {
+	c := New()
+	if c.logger == nil {
+		t.Error("default logger should not be nil")
+	}
+	// Default logger should be DiscardLogger (silent).
+	c.logger.Info("should not panic")
+	c.logger.Error(nil, "should not panic")
+}
+
+func TestAddFuncContext(t *testing.T) {
+	c := New()
+	var gotCtx context.Context
+	done := make(chan struct{}, 1)
+
+	id, err := c.AddFuncContext("@every 1s", func(ctx context.Context) {
+		gotCtx = ctx
+		select {
+		case done <- struct{}{}:
+		default:
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id == 0 {
+		t.Error("expected non-zero ID")
+	}
+
+	c.Start()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for context job")
+	}
+	c.Stop()
+
+	if gotCtx == nil {
+		t.Error("expected context to be passed to job")
+	}
+}
+
+func TestDSTSpringForward(t *testing.T) {
+	// America/New_York springs forward on the second Sunday of March:
+	// 2:00 AM EST → 3:00 AM EDT. Hour 2 does not exist.
+	loc, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		t.Skip("timezone not available")
+	}
+
+	// Schedule for 2:30 AM. On DST day, hour 2 is in the gap.
+	sched := &SpecSchedule{
+		Second:   1 << 0,
+		Minute:   1 << 30,
+		Hour:     1 << 2,
+		Dom:      allDom,
+		Month:    allMonths,
+		Dow:      allDow,
+		Location: loc,
+	}
+
+	// Start from just before the DST transition on March 9, 2025 (DST day).
+	before := time.Date(2025, time.March, 9, 1, 0, 0, 0, loc)
+	next := sched.Next(before)
+
+	// The job should fire at the first moment after the gap (3:00 AM EDT),
+	// not be skipped to the next day.
+	if next.Day() != 9 {
+		t.Errorf("DST: expected job on day 9, got day %d (time: %v)", next.Day(), next)
+	}
+	if next.Hour() < 2 {
+		t.Errorf("DST: expected hour >= 2, got %d (time: %v)", next.Hour(), next)
+	}
+}
+
+func TestDoubleExecutionPrevention(t *testing.T) {
+	// Verify that after running, Next is strictly after Prev,
+	// even if the clock's "now" is before Prev.
+	fc := newFakeClock(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
+	c := New(WithClock(fc))
+
+	var count int32
+	c.AddFunc("@every 5s", func() {
+		atomic.AddInt32(&count, 1)
+	})
+
+	c.Start()
+
+	// Advance past the first scheduled time.
+	fc.Advance(6 * time.Second)
+	time.Sleep(50 * time.Millisecond) // let the job run
+
+	entries := c.Entries()
+	if len(entries) == 0 {
+		t.Fatal("expected entries")
+	}
+	// Next should be strictly after Prev.
+	for _, e := range entries {
+		if !e.Prev.IsZero() && !e.Next.After(e.Prev) {
+			t.Errorf("Next (%v) should be after Prev (%v)", e.Next, e.Prev)
+		}
+	}
+
+	c.Stop()
 }

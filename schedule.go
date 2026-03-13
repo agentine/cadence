@@ -62,9 +62,23 @@ WRAP:
 		}
 	}
 
-	// Hour
+	// Hour — use Truncate+Add to advance by real wall-clock hours,
+	// which handles DST spring-forward correctly (time.Date can go
+	// backward into a DST gap and cause an infinite loop).
 	for 1<<uint(t.Hour())&s.Hour == 0 {
-		t = time.Date(t.Year(), t.Month(), t.Day(), t.Hour()+1, 0, 0, 0, t.Location())
+		prevHour := t.Hour()
+		t = t.Truncate(time.Hour).Add(time.Hour)
+		curHour := t.Hour()
+		// DST spring-forward: if hour jumped by more than 1 (e.g. 1→3),
+		// check if any skipped hour was in the schedule.  If so, fire at
+		// the first valid instant after the gap.
+		if curHour > prevHour+1 {
+			for h := prevHour + 1; h < curHour; h++ {
+				if 1<<uint(h)&s.Hour != 0 {
+					return t
+				}
+			}
+		}
 		if t.Hour() == 0 {
 			goto WRAP
 		}

@@ -394,6 +394,12 @@ var dowNames = map[string]int{
 // plus descriptors.
 var StandardParser = NewParser(Minute | Hour | Dom | Month | Dow | Descriptor)
 
+// ParseStandard parses a standard 5-field cron expression (or descriptor)
+// using the default parser.
+func ParseStandard(spec string) (Schedule, error) {
+	return StandardParser.Parse(spec)
+}
+
 // Ensure SpecSchedule and ConstantDelaySchedule satisfy Schedule.
 var _ Schedule = &SpecSchedule{}
 var _ Schedule = ConstantDelaySchedule{}
