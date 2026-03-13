@@ -2,6 +2,7 @@ package cadence
 
 import (
 	"context"
+	"sync"
 	"time"
 )
 
@@ -128,6 +129,7 @@ type Cron struct {
 	location  *time.Location
 	clock     Clock
 	running   bool
+	mu        sync.Mutex // protects nextID, running, entries (when not running)
 	stop      chan struct{}
 	add       chan *Entry
 	remove    chan EntryID

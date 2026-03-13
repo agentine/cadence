@@ -48,39 +48,50 @@ func (c *Cron) AddJob(spec string, job Job) (EntryID, error) {
 
 // Schedule adds a Job with a pre-built Schedule.
 func (c *Cron) Schedule(schedule Schedule, job Job) EntryID {
+	c.mu.Lock()
 	c.nextID++
+	id := c.nextID
 	entry := &Entry{
-		ID:         c.nextID,
+		ID:         id,
 		Schedule:   schedule,
 		Job:        job,
 		WrappedJob: c.chain.Then(job),
 	}
 
 	if c.running {
+		c.mu.Unlock()
 		c.add <- entry
 	} else {
 		c.entries = append(c.entries, entry)
+		c.mu.Unlock()
 	}
-	return entry.ID
+	return id
 }
 
 // Remove removes the entry with the given ID.
 func (c *Cron) Remove(id EntryID) {
+	c.mu.Lock()
 	if c.running {
+		c.mu.Unlock()
 		c.remove <- id
 	} else {
 		c.removeEntry(id)
+		c.mu.Unlock()
 	}
 }
 
 // Entries returns a snapshot of the current entries.
 func (c *Cron) Entries() []Entry {
+	c.mu.Lock()
 	if c.running {
+		c.mu.Unlock()
 		replyCh := make(chan []Entry, 1)
 		c.snapshot <- replyCh
 		return <-replyCh
 	}
-	return c.entrySnapshot()
+	snap := c.entrySnapshot()
+	c.mu.Unlock()
+	return snap
 }
 
 // Entry returns the entry with the given ID, or an empty Entry if not found.
@@ -95,6 +106,8 @@ func (c *Cron) Entry(id EntryID) Entry {
 
 // Start starts the cron scheduler in a background goroutine.
 func (c *Cron) Start() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if c.running {
 		return
 	}
@@ -104,21 +117,27 @@ func (c *Cron) Start() {
 
 // Run starts the cron scheduler in the foreground (blocking).
 func (c *Cron) Run() {
+	c.mu.Lock()
 	if c.running {
+		c.mu.Unlock()
 		return
 	}
 	c.running = true
+	c.mu.Unlock()
 	c.run()
 }
 
 // Stop signals the cron scheduler to stop. The returned context is
 // done when all currently-running jobs have completed.
 func (c *Cron) Stop() context.Context {
+	c.mu.Lock()
 	if !c.running {
+		c.mu.Unlock()
 		return c.ctx
 	}
-	c.stop <- struct{}{}
 	c.running = false
+	c.mu.Unlock()
+	c.stop <- struct{}{}
 	return c.ctx
 }
 
